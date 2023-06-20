@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/koshkaj/bloq/node"
 	"github.com/koshkaj/bloq/proto"
@@ -12,25 +13,18 @@ import (
 
 func main() {
 	makeNode(":3000", []string{})
-	makeNode(":4000", []string{":3000"})
-	// go func() {
-	// 	for {
-	// 		time.Sleep(1 * time.Second)
-	// 		makeTransaction(listenAddr)
-	// 	}
-	// }()
+	time.Sleep(1 * time.Second)
+	makeNode(":3001", []string{":3000"})
+	time.Sleep(3 * time.Second)
+	makeNode(":4001", []string{":3001"})
+	// makeTransaction(listenAddr)
 	// log.Fatal(node.Start(listenAddr))
 	select {}
 }
 
 func makeNode(listenAddr string, bootstrapNodes []string) *node.Node {
 	n := node.New()
-	go n.Start(listenAddr)
-	if len(bootstrapNodes) > 0 {
-		if err := n.BootstrapNetwork(bootstrapNodes); err != nil {
-			log.Fatal(err)
-		}
-	}
+	go n.Start(listenAddr, bootstrapNodes)
 	return n
 }
 

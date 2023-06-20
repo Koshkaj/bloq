@@ -36,18 +36,15 @@ func New() *Node {
 	}
 }
 
-func (n *Node) BootstrapNetwork(addrs []string) error {
+func (n *Node) bootstrapNetwork(addrs []string) error {
 	for _, addr := range addrs {
-		c, err := makeNodeClient(addr)
+		if !n.canConnectWith(addr) {
+			continue
+		}
+		c, v, err := n.dialRemote(addr)
 		if err != nil {
 			return err
 		}
-		v, err := c.Handshake(context.Background(), n.getVersion())
-		if err != nil {
-			fmt.Println("handshake error : ", err)
-			continue
-		}
-
 		n.addPeer(c, v)
 	}
 	return nil
@@ -74,7 +71,7 @@ func (n *Node) getPeerList() []string {
 
 }
 
-func (n *Node) Start(listenAddr string) error {
+func (n *Node) Start(listenAddr string, bootstrapNodes []string) error {
 	n.listenAddr = listenAddr
 	opts := []grpc.ServerOption{}
 	grpcServer := grpc.NewServer(opts...)
@@ -84,7 +81,9 @@ func (n *Node) Start(listenAddr string) error {
 	}
 	proto.RegisterNodeServer(grpcServer, n)
 
-	// go n.bootstrapNetwork()
+	if len(bootstrapNodes) > 0 {
+		go n.bootstrapNetwork(bootstrapNodes)
+	}
 
 	n.logger.Info("node running: ", n.listenAddr)
 	return grpcServer.Serve(ln)
@@ -93,15 +92,34 @@ func (n *Node) Start(listenAddr string) error {
 func (n *Node) addPeer(c proto.NodeClient, v *proto.Version) {
 	n.peerLock.Lock()
 	defer n.peerLock.Unlock()
-
-	n.logger.Debugf("[%s] new peer connected (%s) - height (%d)", n.listenAddr, v.ListenAddr, v.Height)
 	n.peers[c] = v
+
+	if len(v.PeerList) > 0 {
+		go n.bootstrapNetwork(v.PeerList)
+	}
+	n.logger.Debugw("new peer connected",
+		"we", n.listenAddr,
+		"remoteNode", v.ListenAddr,
+		"height", v.Height)
 }
 
 func (n *Node) deletePeer(c proto.NodeClient) {
 	n.peerLock.Lock()
 	defer n.peerLock.Unlock()
 	delete(n.peers, c)
+}
+
+func (n *Node) canConnectWith(addr string) bool {
+	if n.listenAddr == addr {
+		return false
+	}
+	connectedPeers := n.getPeerList()
+	for _, connectedAddr := range connectedPeers {
+		if addr == connectedAddr {
+			return false
+		}
+	}
+	return true
 }
 
 func (n *Node) HandleTransaction(ctx context.Context, tx *proto.Transaction) (*proto.Ack, error) {
@@ -125,4 +143,16 @@ func makeNodeClient(listenAddr string) (proto.NodeClient, error) {
 		return nil, err
 	}
 	return proto.NewNodeClient(c), nil
+}
+
+func (n *Node) dialRemote(addr string) (proto.NodeClient, *proto.Version, error) {
+	c, err := makeNodeClient(addr)
+	if err != nil {
+		return nil, nil, err
+	}
+	v, err := c.Handshake(context.Background(), n.getVersion())
+	if err != nil {
+		return nil, nil, err
+	}
+	return c, v, nil
 }
