@@ -58,7 +58,20 @@ func (n *Node) getVersion() *proto.Version {
 		Version:    "bloq-1",
 		Height:     0,
 		ListenAddr: n.listenAddr,
+		PeerList:   n.getPeerList(),
 	}
+}
+
+func (n *Node) getPeerList() []string {
+	n.peerLock.RLock()
+	defer n.peerLock.RUnlock()
+
+	peers := []string{}
+	for _, version := range n.peers {
+		peers = append(peers, version.ListenAddr)
+	}
+	return peers
+
 }
 
 func (n *Node) Start(listenAddr string) error {
