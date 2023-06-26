@@ -1,7 +1,6 @@
 package node
 
 import (
-	"encoding/hex"
 	"testing"
 
 	"github.com/koshkaj/bloq/crypto"
@@ -63,16 +62,24 @@ func TestAddBlockWithTx(t *testing.T) {
 		block     = randomBlock(t, chain)
 		recipient = crypto.GeneratePrivateKey().Public().Address().Bytes()
 	)
+	ftt, err := chain.txStore.Get("3621faa661c206054d614eaa103687095e6dc8722bb31a03143bd3deeb0613b0") // Genisis Transaction
+	assert.Nil(t, err)
 
 	inputs := []*proto.TxInput{
 		{
-			PublicKey: privKey.Public().Bytes(),
+			PrevTxHash:   types.HashTransaction(ftt),
+			PrevOutIndex: 0,
+			PublicKey:    privKey.Public().Bytes(),
 		},
 	}
 	outputs := []*proto.TxOutput{
 		{
 			Amount:  100,
 			Address: recipient,
+		},
+		{
+			Amount:  8788,
+			Address: privKey.Public().Address().Bytes(), // nashti racaa gavigzavnot ukan chven addressze
 		},
 	}
 
@@ -86,8 +93,40 @@ func TestAddBlockWithTx(t *testing.T) {
 
 	block.Transactions = append(block.Transactions, tx)
 	require.Nil(t, chain.AddBlock(block))
-	txHash := hex.EncodeToString(types.HashTransaction(tx))
-	fetchedTx, err := chain.txStore.Get(txHash)
+}
+
+func TestAddBlockWithTxLowFunds(t *testing.T) {
+	var (
+		privKey   = crypto.NewPrivateKeyFromSeedStr(seed)
+		chain     = NewChain(NewMemoryBlockStore(), NewMemoryTXStore())
+		block     = randomBlock(t, chain)
+		recipient = crypto.GeneratePrivateKey().Public().Address().Bytes()
+	)
+	ftt, err := chain.txStore.Get("3621faa661c206054d614eaa103687095e6dc8722bb31a03143bd3deeb0613b0") // Genisis Transaction
 	assert.Nil(t, err)
-	assert.Equal(t, tx, fetchedTx)
+
+	inputs := []*proto.TxInput{
+		{
+			PrevTxHash:   types.HashTransaction(ftt),
+			PrevOutIndex: 0,
+			PublicKey:    privKey.Public().Bytes(),
+		},
+	}
+	outputs := []*proto.TxOutput{
+		{
+			Amount:  9999,
+			Address: recipient,
+		},
+	}
+
+	tx := &proto.Transaction{
+		Version: 1,
+		Inputs:  inputs,
+		Outputs: outputs,
+	}
+	sig := types.SignTransaction(privKey, tx)
+	tx.Inputs[0].Signature = sig.Bytes()
+
+	block.Transactions = append(block.Transactions, tx)
+	require.NotNil(t, chain.AddBlock(block))
 }

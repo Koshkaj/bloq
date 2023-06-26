@@ -9,6 +9,39 @@ import (
 	"github.com/koshkaj/bloq/types"
 )
 
+type UTXOStorer interface {
+	Put(*UTXO) error
+	Get(string) (*UTXO, error)
+}
+
+type MemoryUTXOStore struct {
+	mu   sync.RWMutex
+	data map[string]*UTXO
+}
+
+func (s *MemoryUTXOStore) Get(hash string) (*UTXO, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	utxo, ok := s.data[hash]
+	if !ok {
+		return nil, fmt.Errorf("could not find utxo with hash %s", hash)
+	}
+	return utxo, nil
+}
+
+func (s *MemoryUTXOStore) Put(utxo *UTXO) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := fmt.Sprintf("%s_%d", utxo.Hash, utxo.OutIndex)
+	s.data[key] = utxo
+	return nil
+}
+func NewMemoryUTXOStore() *MemoryUTXOStore {
+	return &MemoryUTXOStore{
+		data: make(map[string]*UTXO),
+	}
+}
+
 type TXStorer interface {
 	Put(*proto.Transaction) error
 	Get(string) (*proto.Transaction, error)

@@ -42,9 +42,17 @@ func (list *HeaderList) Len() int {
 	return len(list.headers)
 }
 
+type UTXO struct {
+	Hash     string
+	OutIndex int
+	Amount   int64
+	Spent    bool
+}
+
 type Chain struct {
 	txStore    TXStorer
 	blockStore BlockStorer
+	utxoStore  UTXOStorer
 	headers    *HeaderList
 }
 
@@ -52,6 +60,7 @@ func NewChain(bs BlockStorer, txStore TXStorer) *Chain {
 	chain := &Chain{
 		blockStore: bs,
 		headers:    NewHeaderList(),
+		utxoStore:  NewMemoryUTXOStore(),
 		txStore:    txStore,
 	}
 	chain.addBlock(createGenesisBlock())
@@ -98,10 +107,43 @@ func (c *Chain) ValidateBlock(b *proto.Block) error {
 		return fmt.Errorf("invalid previous block hash")
 	}
 	for _, tx := range b.Transactions {
-		if !types.VerifyTransaction(tx) {
-			return fmt.Errorf("invalid tx signature")
+		if err := c.ValidateTransaction(tx); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (c *Chain) ValidateTransaction(tx *proto.Transaction) error {
+	if !types.VerifyTransaction(tx) {
+		return fmt.Errorf("invalid tx signature")
+	}
+	var (
+		nIutputs   = len(tx.Inputs)
+		hash       = types.HashTransaction(tx)
+		sumInputs  = 0
+		sumOutputs = 0
+	)
+
+	for i := 0; i < nIutputs; i++ {
+		prevHash := hex.EncodeToString(tx.Inputs[i].PrevTxHash)
+		key := fmt.Sprintf("%s_%d", prevHash, i)
+		utxo, err := c.utxoStore.Get(key)
+		sumInputs += int(utxo.Amount)
+		if err != nil {
+			return err
+		}
+		if utxo.Spent {
+			return fmt.Errorf("input %d of tx %s is already spent", i, hash)
+		}
+	}
+	for _, output := range tx.Outputs {
+		sumOutputs += int(output.Amount)
+	}
+	if sumInputs < sumOutputs {
+		return fmt.Errorf("insufficient balance")
+	}
+
 	return nil
 }
 
@@ -110,6 +152,18 @@ func (c *Chain) addBlock(b *proto.Block) error {
 	for _, tx := range b.Transactions {
 		if err := c.txStore.Put(tx); err != nil {
 			return err
+		}
+		for idx, output := range tx.Outputs {
+			hash := hex.EncodeToString(types.HashTransaction(tx))
+			utxo := &UTXO{
+				Hash:     hash,
+				Amount:   output.Amount,
+				OutIndex: idx,
+				Spent:    false,
+			}
+			if err := c.utxoStore.Put(utxo); err != nil {
+				return err
+			}
 		}
 	}
 
