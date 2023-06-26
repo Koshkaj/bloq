@@ -2,37 +2,49 @@ package node
 
 import (
 	"context"
-	"fmt"
+	"encoding/hex"
 	"log"
 	"net"
 	"sync"
+	"time"
 
+	"github.com/koshkaj/bloq/crypto"
 	"github.com/koshkaj/bloq/proto"
+	"github.com/koshkaj/bloq/types"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/peer"
 )
 
+const blockTime = time.Second * 5
+
+type ServerConfig struct {
+	Version    string
+	ListenAddr string
+	PrivateKey *crypto.PrivateKey
+}
+
 type Node struct {
-	version    string
-	listenAddr string
-	logger     *zap.SugaredLogger
+	ServerConfig
+	logger *zap.SugaredLogger
 
 	peerLock sync.RWMutex
 	peers    map[proto.NodeClient]*proto.Version
+	mempool  *Mempool
 
 	proto.UnimplementedNodeServer
 }
 
-func New() *Node {
+func New(cfg ServerConfig) *Node {
 	loggerconfig := zap.NewDevelopmentConfig()
 	loggerconfig.EncoderConfig.TimeKey = ""
 	logger, _ := loggerconfig.Build()
 	return &Node{
-		version: "bloq-1",
-		peers:   make(map[proto.NodeClient]*proto.Version),
-		logger:  logger.Sugar(),
+		peers:        make(map[proto.NodeClient]*proto.Version),
+		logger:       logger.Sugar(),
+		mempool:      NewMempool(),
+		ServerConfig: cfg,
 	}
 }
 
@@ -54,7 +66,7 @@ func (n *Node) getVersion() *proto.Version {
 	return &proto.Version{
 		Version:    "bloq-1",
 		Height:     0,
-		ListenAddr: n.listenAddr,
+		ListenAddr: n.ListenAddr,
 		PeerList:   n.getPeerList(),
 	}
 }
@@ -72,7 +84,7 @@ func (n *Node) getPeerList() []string {
 }
 
 func (n *Node) Start(listenAddr string, bootstrapNodes []string) error {
-	n.listenAddr = listenAddr
+	n.ListenAddr = listenAddr
 	opts := []grpc.ServerOption{}
 	grpcServer := grpc.NewServer(opts...)
 	ln, err := net.Listen("tcp", listenAddr)
@@ -81,11 +93,15 @@ func (n *Node) Start(listenAddr string, bootstrapNodes []string) error {
 	}
 	proto.RegisterNodeServer(grpcServer, n)
 
+	n.logger.Info("node running: ", n.ListenAddr)
 	if len(bootstrapNodes) > 0 {
 		go n.bootstrapNetwork(bootstrapNodes)
 	}
 
-	n.logger.Info("node running: ", n.listenAddr)
+	if n.PrivateKey != nil {
+		go n.validatorLoop()
+	}
+
 	return grpcServer.Serve(ln)
 }
 
@@ -98,7 +114,7 @@ func (n *Node) addPeer(c proto.NodeClient, v *proto.Version) {
 		go n.bootstrapNetwork(v.PeerList)
 	}
 	n.logger.Debugw("new peer connected",
-		"we", n.listenAddr,
+		"we", n.ListenAddr,
 		"remoteNode", v.ListenAddr,
 		"height", v.Height)
 }
@@ -110,7 +126,7 @@ func (n *Node) deletePeer(c proto.NodeClient) {
 }
 
 func (n *Node) canConnectWith(addr string) bool {
-	if n.listenAddr == addr {
+	if n.ListenAddr == addr {
 		return false
 	}
 	connectedPeers := n.getPeerList()
@@ -124,7 +140,17 @@ func (n *Node) canConnectWith(addr string) bool {
 
 func (n *Node) HandleTransaction(ctx context.Context, tx *proto.Transaction) (*proto.Ack, error) {
 	peer, _ := peer.FromContext(ctx)
-	fmt.Println("received tx from :", peer)
+	hash := hex.EncodeToString(types.HashTransaction(tx))
+
+	if !n.mempool.Has(tx) {
+		n.mempool.Add(tx)
+		n.logger.Debugw("received tx ", "from", peer.Addr, "hash", hash, "we", n.ListenAddr)
+		go func() {
+			if err := n.broadcast(tx); err != nil {
+				n.logger.Errorw("broadcast error", "err", err)
+			}
+		}()
+	}
 	return &proto.Ack{}, nil
 }
 
@@ -137,12 +163,28 @@ func (n *Node) Handshake(ctx context.Context, v *proto.Version) (*proto.Version,
 	return n.getVersion(), nil
 }
 
-func makeNodeClient(listenAddr string) (proto.NodeClient, error) {
-	c, err := grpc.Dial(listenAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, err
+func (n *Node) broadcast(msg any) error {
+	for peer := range n.peers {
+		switch v := msg.(type) {
+		case *proto.Transaction:
+			_, err := peer.HandleTransaction(context.Background(), v)
+			if err != nil {
+				return err
+			}
+		}
 	}
-	return proto.NewNodeClient(c), nil
+	return nil
+}
+
+func (n *Node) validatorLoop() {
+	n.logger.Infow("starting validator loop", "pubkey", n.PrivateKey.Public(), "blocktime", blockTime)
+	ticker := time.NewTicker(blockTime)
+
+	for {
+		<-ticker.C
+		n.logger.Debugw("time to create a new block", "lenTx", n.mempool.Length())
+	}
+
 }
 
 func (n *Node) dialRemote(addr string) (proto.NodeClient, *proto.Version, error) {
@@ -155,4 +197,12 @@ func (n *Node) dialRemote(addr string) (proto.NodeClient, *proto.Version, error)
 		return nil, nil, err
 	}
 	return c, v, nil
+}
+
+func makeNodeClient(listenAddr string) (proto.NodeClient, error) {
+	c, err := grpc.Dial(listenAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	return proto.NewNodeClient(c), nil
 }
