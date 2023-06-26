@@ -4,6 +4,6 @@ Bloq is a blockchain implementation in Go that aims to provide a secure and dece
 
 🚀 Features
 - Immutable ledger: All transactions are recorded on the blockchain, ensuring transparency and auditability.
-- Consensus Algorithm: Consensus is achieved through a distributed network of nodes using the PoW algorithm.
+- Consensus Algorithm: Consensus is achieved through a distributed network of nodes using the PoS mock algorithm.
 - Transaction Handling: Efficient handling and verification of transactions, ensuring integrity and security.
 - P2P Network: A peer-to-peer network for communication and synchronization of the blockchain across nodes.
