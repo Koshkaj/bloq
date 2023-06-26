@@ -182,7 +182,8 @@ func (n *Node) validatorLoop() {
 
 	for {
 		<-ticker.C
-		n.logger.Debugw("time to create a new block", "lenTx", n.mempool.Length())
+		txx := n.mempool.Clear()
+		n.logger.Debugw("time to create a new block", "lenTx", len(txx))
 	}
 
 }

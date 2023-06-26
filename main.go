@@ -19,10 +19,8 @@ func main() {
 	makeNode(":3001", []string{":3000"}, false)
 	time.Sleep(3 * time.Second)
 	makeNode(":4001", []string{":3001"}, false)
-	// makeTransaction(listenAddr)
-	// log.Fatal(node.Start(listenAddr))
 	for {
-		time.Sleep(time.Second * 2)
+		time.Sleep(time.Millisecond * 100)
 		makeTransaction()
 	}
 }
