@@ -11,6 +11,8 @@ import (
 	"github.com/koshkaj/bloq/types"
 )
 
+const seed = "13be19fc5de106d87f9deaec7de204bd5b3a36bb50d66f81fdd5d1482dbeab6e"
+
 type HeaderList struct {
 	headers []*proto.Header
 }
@@ -41,14 +43,16 @@ func (list *HeaderList) Len() int {
 }
 
 type Chain struct {
+	txStore    TXStorer
 	blockStore BlockStorer
 	headers    *HeaderList
 }
 
-func NewChain(bs BlockStorer) *Chain {
+func NewChain(bs BlockStorer, txStore TXStorer) *Chain {
 	chain := &Chain{
 		blockStore: bs,
 		headers:    NewHeaderList(),
+		txStore:    txStore,
 	}
 	chain.addBlock(createGenesisBlock())
 	return chain
@@ -98,16 +102,33 @@ func (c *Chain) ValidateBlock(b *proto.Block) error {
 
 func (c *Chain) addBlock(b *proto.Block) error {
 	c.headers.Add(b.Header)
+	for _, tx := range b.Transactions {
+		if err := c.txStore.Put(tx); err != nil {
+			return err
+		}
+	}
+
 	return c.blockStore.Put(b)
 }
 
 func createGenesisBlock() *proto.Block {
-	privKey := crypto.GeneratePrivateKey()
+	privKey := crypto.NewPrivateKeyFromSeedStr(seed)
 	block := &proto.Block{
 		Header: &proto.Header{
 			Version: 1,
 		},
 	}
+	tx := &proto.Transaction{
+		Version: 1,
+		Inputs:  []*proto.TxInput{},
+		Outputs: []*proto.TxOutput{
+			{
+				Amount:  8888,
+				Address: privKey.Public().Address().Bytes(),
+			},
+		},
+	}
+	block.Transactions = append(block.Transactions, tx)
 	types.SignBlock(privKey, block)
 
 	return block
